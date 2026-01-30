@@ -189,7 +189,7 @@
             <div class="p-8 space-y-6">
                 <div class="space-y-2">
                     <label class="text-xs font-black text-slate-400 uppercase">區域名稱</label>
-                    <input type="text" id="new-region-name" placeholder="例如：桃園地區、台中工業區..." class="w-full border-2 border-slate-100 rounded-2xl px-5 py-3 outline-none focus:border-indigo-500 transition-all font-bold">
+                    <input type="text" id="new-region-name" placeholder="例如：台南地區..." class="w-full border-2 border-slate-100 rounded-2xl px-5 py-3 outline-none focus:border-indigo-500 transition-all font-bold">
                 </div>
                 <button onclick="confirmAddRegion()" class="w-full bg-indigo-600 text-white font-black py-4 rounded-2xl hover:bg-indigo-700 transition-all shadow-lg shadow-indigo-200">建立區域</button>
             </div>
@@ -236,8 +236,15 @@
             ratePC_M3: 'PC 混凝土 (元/m³)', rateForm_M2: '模板 (元/m²)', rateRebar_KG: '鋼筋 (元/kg)'
         };
 
+        // 預設區域設定 - 已按雙北、桃園、台中、南區順序排列
+        let regions = [
+            { id: 'north', name: '雙北區', ...DEFAULT_PARAMS, rateEarthworkM3: 650 },
+            { id: 'taoyuan', name: '桃園區', ...DEFAULT_PARAMS, rateEarthworkM3: 580 },
+            { id: 'central', name: '台中區', ...DEFAULT_PARAMS, rateEarthworkM3: 500 },
+            { id: 'south', name: '南區', ...DEFAULT_PARAMS, rateEarthworkM3: 450 }
+        ];
+
         let state = { retainingMethod: 'wall', belowUnitArea: 150, belowFloors: 3, belowPerimeter: 0, activeRegionId: 'north' };
-        let regions = [{ id: 'north', name: '雙北地區', ...DEFAULT_PARAMS }, { id: 'south', name: '台中地區', ...DEFAULT_PARAMS, rateEarthworkM3: 450 }];
         let db, auth, appId;
 
         async function initFirebase() {
@@ -262,11 +269,26 @@
             db.doc(`artifacts/${appId}/users/${uid}/settings/current`).onSnapshot(doc => { if (doc.exists) { state = { ...state, ...doc.data() }; render(); } });
             db.collection(`artifacts/${appId}/users/${uid}/regions`).onSnapshot(snap => {
                 if (!snap.empty) { 
-                    regions = snap.docs.map(d => ({ id: d.id, ...DEFAULT_PARAMS, ...d.data() })); 
+                    // 根據資料庫內容更新，但若要維持特定順序，需在此處理。
+                    // 這裡暫採讀取後按字母或名稱排序，或依據原始陣列順序。
+                    const loaded = snap.docs.map(d => ({ id: d.id, ...DEFAULT_PARAMS, ...d.data() }));
+                    // 維持 雙北、桃園、台中、南區 的主要邏輯順序
+                    const order = ['north', 'taoyuan', 'central', 'south'];
+                    regions = loaded.sort((a, b) => {
+                        let idxA = order.indexOf(a.id);
+                        let idxB = order.indexOf(b.id);
+                        if (idxA === -1) idxA = 999;
+                        if (idxB === -1) idxB = 999;
+                        return idxA - idxB;
+                    });
                     if (!regions.find(r => r.id === state.activeRegionId)) state.activeRegionId = regions[0].id;
                     render(); 
                 }
-                else { const batch = db.batch(); regions.forEach(r => batch.set(db.doc(`artifacts/${appId}/users/${uid}/regions/${r.id}`), r)); batch.commit(); }
+                else { 
+                    const batch = db.batch(); 
+                    regions.forEach(r => batch.set(db.doc(`artifacts/${appId}/users/${uid}/regions/${r.id}`), r)); 
+                    batch.commit(); 
+                }
             }, () => console.log("Disconnected"));
         }
 
@@ -389,12 +411,13 @@
             let retainingCost = 0, wallThickness = 0, pileCount = 0;
             let cappingBeamQty = 0, laggingBoardQty = 0;
             let bendQtyTotal = 0;
+            let wallDepth = 0;
+            let wallTotalArea = 0;
 
             if (isWall) {
-                // 使用可編修的 thicknessRatio
                 wallThickness = Math.max(0.6, Math.round((excavationDepth / activeReg.thicknessRatio) * 10) / 10);
-                // 使用可編修的 depthRatio
-                const wallTotalArea = finalPerimeter * (excavationDepth * activeReg.depthRatio);
+                wallDepth = excavationDepth * activeReg.depthRatio;
+                wallTotalArea = finalPerimeter * wallDepth;
                 
                 let wallRate = activeReg.rateWall60;
                 if (wallThickness >= 1.0) wallRate = activeReg.rateWall100;
@@ -410,6 +433,7 @@
                 pileCount = Math.ceil(finalPerimeter / activeReg.pileSpacing);
                 cappingBeamQty = finalPerimeter;
                 laggingBoardQty = finalPerimeter * excavationDepth;
+                wallTotalArea = laggingBoardQty; 
                 const cappingBeamCost = cappingBeamQty * activeReg.rateCappingBeam;
                 const laggingBoardCost = laggingBoardQty * activeReg.rateLaggingBoard;
                 
@@ -424,16 +448,19 @@
             const supportPostCount = activeReg.supportHorizontalSpacing > 0 ? Math.ceil(areaM2 / Math.pow(activeReg.supportHorizontalSpacing, 2)) : 0;
             
             const monitoringCost = totalBelowBuildArea * activeReg.rateMonitoring;
-            const supportCost = (areaM2 * supportLayers * activeReg.rateSupportM2) + (supportPostCount * (activeReg.rateSupportPostRent + activeReg.rateSupportPostBuy)) + (areaM2 * activeReg.platformRatio * activeReg.ratePlatformM2) + monitoringCost;
+            const platformArea = areaM2 * activeReg.platformRatio;
+            const supportCost = (areaM2 * supportLayers * activeReg.rateSupportM2) + (supportPostCount * (activeReg.rateSupportPostRent + activeReg.rateSupportPostBuy)) + (platformArea * activeReg.ratePlatformM2) + monitoringCost;
             
             const extraCost = totalBelowBuildArea * (activeReg.rateBasementMEP + activeReg.rateBasementFinish);
 
-            let retainingDesc = isWall ? `壁厚:${wallThickness*100}cm / 預留筋:${Math.round(bendQtyTotal)}m` : `樁數:${pileCount}支 / 壓梁:${cappingBeamQty}m / 擋土板:${Math.round(laggingBoardQty)}m²`;
+            let retainingDesc = isWall ? `壁厚:${wallThickness*100}cm / 深度:${wallDepth.toFixed(1)}m / 面積:${Math.round(wallTotalArea)}m²` : `樁數:${pileCount}支 / 深度:${excavationDepth.toFixed(1)}m / 面積:${Math.round(wallTotalArea)}m²`;
+            let structureDesc = `RC:${Math.round(totalRC)}m³ / 模板:${Math.round(totalForm)}m² / 鋼筋:${(totalRebar/1000).toFixed(1)}T`;
+            let supportDesc = `支撐:${supportLayers}層 / 中間樁:${supportPostCount}支 / 構台:${Math.round(platformArea)}m²`;
 
             const results = [
                 { l: isWall ? "擋土工程 (連續壁)" : "擋土工程 (排樁)", v: retainingCost, desc: retainingDesc, color: 'bg-indigo-500' },
-                { l: "結構主體工程", v: structureCost, desc: `RC:${Math.round(totalRC)}m³ / 模板:${Math.round(totalForm)}m² / PC:${Math.round(pcVolume)}m³`, color: 'bg-emerald-500' },
-                { l: "安全支撐工程", v: supportCost, desc: `支撐:${supportLayers}層 / 觀測:${totalBelowBuildArea}坪 / 構台:${(activeReg.platformRatio*100).toFixed(0)}%`, color: 'bg-rose-500' },
+                { l: "結構主體工程", v: structureCost, desc: structureDesc, color: 'bg-emerald-500' },
+                { l: "安全支撐工程", v: supportCost, desc: supportDesc, color: 'bg-rose-500' },
                 { l: "土方清運工程", v: earthworkCost, desc: `預估土方量: ${Math.round(earthworkVolume)}m³`, color: 'bg-amber-500' }
             ];
             const total = results.reduce((a, b) => a + b.v, 0) + extraCost;

@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>地下室工程造價概算系統 v56.4 - 擋土與PC細項版</title>
+    <title>地下室工程造價概算系統 v56.8 - 參數可調版</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://unpkg.com/lucide@latest"></script>
     <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-app-compat.js"></script>
@@ -25,7 +25,7 @@
         <header class="flex flex-col md:flex-row md:items-start justify-between mb-8 gap-6 border-b pb-8 border-slate-200">
             <div class="space-y-3">
                 <div class="flex items-center gap-2 text-indigo-600 font-black text-xs tracking-widest uppercase">
-                    <span class="bg-indigo-600 text-white px-2 py-0.5 rounded">PRO</span> Version 56.4
+                    <span class="bg-indigo-600 text-white px-2 py-0.5 rounded">PRO</span> Version 56.8
                 </div>
                 <h1 class="text-3xl font-black text-slate-800 flex items-center gap-3">
                     <i data-lucide="building-2" class="text-indigo-700 w-8 h-8"></i>
@@ -204,10 +204,11 @@
         const DEFAULT_PARAMS = {
             rateWall60: 18500, rateWall70: 20500, rateWall80: 22500, rateWall90: 25000, rateWall100: 27500,
             rateGuideWall: 4500, ratePavement: 1200, rateSettlingTank: 150000, rateWallChip: 1200, rateWallRebarBend: 1500,
-            rateCappingBeam: 4500, // 壓梁單價 (元/m)
-            rateLaggingBoard: 1150, // 擋土板單價 (元/m2)
+            rateCappingBeam: 4500, 
+            rateLaggingBoard: 1150, 
             ratePileUnit: 48000,
             rateSupportM2: 850, rateSupportPostRent: 35000, rateSupportPostBuy: 55000, ratePlatformM2: 12000,
+            rateMonitoring: 500, 
             rateEarthworkM3: 550, rateBasementMEP: 14000, rateBasementFinish: 6000, 
             rateRC_M3: 3100, ratePC_M3: 2500, rateForm_M2: 950, rateRebar_KG: 32.5,
             depthRatio: 2.0, thicknessRatio: 20, pileSpacing: 1.2, 
@@ -222,11 +223,12 @@
             rateWall60: '60cm壁 (元/m²)', rateWall70: '70cm壁 (元/m²)', rateWall80: '80cm壁 (元/m²)',
             rateWall90: '90cm壁 (元/m²)', rateWall100: '100cm壁 (元/m²)', rateGuideWall: '導溝工程 (元/m)',
             ratePavement: '舖面工程 (元/m²)', rateSettlingTank: '棄土沈澱池 (元/式)', rateWallChip: '劣質打除 (元/m)', 
-            rateWallRebarBend: '預留筋彎出 (元/組)', 
+            rateWallRebarBend: '預留筋彎出 (元/m)', 
+            depthRatio: '連壁深度比 (倍)', thicknessRatio: '連壁厚度比 (1/N)',
             rateCappingBeam: '壓梁工程 (元/m)', rateLaggingBoard: '擋土板工程 (元/m²)',
             ratePileUnit: '排樁單支 (元)',
             rateSupportM2: '支撐費 (元/m²)', rateSupportPostRent: '中間樁租金 (元/支)', rateSupportPostBuy: '中間樁買斷 (元/支)', 
-            ratePlatformM2: '施工構台 (元/m²)', 
+            ratePlatformM2: '施工構台 (元/m²)', rateMonitoring: '安全觀測 (元/坪)',
             supportHorizontalSpacing: '支撐水平間距 (m)', supportVerticalSpan: '支撐垂直跨距 (m)',
             platformRatio: '施工構台比例 (0~1)',
             rateEarthworkM3: '土方清運 (元/m³)', rateBasementMEP: '機電 (元/坪)', 
@@ -317,7 +319,7 @@
         function exportToExcel() {
             const wb = XLSX.utils.book_new();
             XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(regions), "單價庫參數");
-            XLSX.writeFile(wb, `地下室概算系統_v56_4.xlsx`);
+            XLSX.writeFile(wb, `地下室概算系統_v56_8.xlsx`);
         }
 
         function importFromExcel(event) {
@@ -362,9 +364,14 @@
             const areaM2 = state.belowUnitArea * PING_TO_M2;
             const sysPerimeter = Math.round(Math.sqrt(areaM2) * 4);
             const finalPerimeter = state.belowPerimeter > 0 ? state.belowPerimeter : sysPerimeter;
-            const excavationDepth = activeReg.b1HeightCustom + (Math.max(0, state.belowFloors - 1) * activeReg.typicalHeightCustom) + activeReg.raftFoundationCustom;
             const floors = state.belowFloors;
             const totalBelowBuildArea = state.belowUnitArea * floors;
+
+            // 高度相關物理量
+            const b1Height = activeReg.b1HeightCustom;
+            const typTotalHeight = Math.max(0, floors - 1) * activeReg.typicalHeightCustom;
+            const raftHeight = activeReg.raftFoundationCustom;
+            const excavationDepth = b1Height + typTotalHeight + raftHeight;
 
             let totalRC = 0, totalForm = 0, totalRebar = 0;
             if (floors >= 2) {
@@ -375,52 +382,58 @@
                 totalRC = areaM2 * activeReg.unitRC_Raft; totalForm = areaM2 * activeReg.unitForm_Raft; totalRebar = areaM2 * activeReg.unitRebar_Raft;
             }
 
-            // 新增: PC 混凝土 (地下單層面積 * 0.1)
             const pcVolume = areaM2 * 0.1;
             const pcCost = pcVolume * activeReg.ratePC_M3;
 
             const isWall = state.retainingMethod === 'wall';
             let retainingCost = 0, wallThickness = 0, pileCount = 0;
-
-            // 新增: 壓梁與擋土板邏輯
-            const cappingBeamQty = finalPerimeter;
-            const laggingBoardQty = finalPerimeter * excavationDepth;
-            const cappingBeamCost = cappingBeamQty * activeReg.rateCappingBeam;
-            const laggingBoardCost = laggingBoardQty * activeReg.rateLaggingBoard;
+            let cappingBeamQty = 0, laggingBoardQty = 0;
+            let bendQtyTotal = 0;
 
             if (isWall) {
+                // 使用可編修的 thicknessRatio
                 wallThickness = Math.max(0.6, Math.round((excavationDepth / activeReg.thicknessRatio) * 10) / 10);
+                // 使用可編修的 depthRatio
                 const wallTotalArea = finalPerimeter * (excavationDepth * activeReg.depthRatio);
+                
                 let wallRate = activeReg.rateWall60;
                 if (wallThickness >= 1.0) wallRate = activeReg.rateWall100;
                 else if (wallThickness >= 0.9) wallRate = activeReg.rateWall90;
                 else if (wallThickness >= 0.8) wallRate = activeReg.rateWall80;
                 else if (wallThickness >= 0.7) wallRate = activeReg.rateWall70;
-                const bendQty = (finalPerimeter * state.belowFloors) + (finalPerimeter / 8 * (excavationDepth - activeReg.raftFoundationCustom));
-                // 擋土工程基本 (連續壁)
-                retainingCost = (wallTotalArea * wallRate) + (finalPerimeter * activeReg.rateGuideWall) + (areaM2 * activeReg.ratePavement) + activeReg.rateSettlingTank + (finalPerimeter * activeReg.rateWallChip) + (bendQty * activeReg.rateWallRebarBend) + cappingBeamCost + laggingBoardCost;
+                
+                bendQtyTotal = (finalPerimeter * floors) + ((finalPerimeter / 8) * (b1Height + typTotalHeight));
+                const bendCost = bendQtyTotal * activeReg.rateWallRebarBend;
+                
+                retainingCost = (wallTotalArea * wallRate) + (finalPerimeter * activeReg.rateGuideWall) + (areaM2 * activeReg.ratePavement) + activeReg.rateSettlingTank + (finalPerimeter * activeReg.rateWallChip) + bendCost;
             } else {
                 pileCount = Math.ceil(finalPerimeter / activeReg.pileSpacing);
-                // 擋土工程基本 (排樁) + 累計壓梁與擋土板
+                cappingBeamQty = finalPerimeter;
+                laggingBoardQty = finalPerimeter * excavationDepth;
+                const cappingBeamCost = cappingBeamQty * activeReg.rateCappingBeam;
+                const laggingBoardCost = laggingBoardQty * activeReg.rateLaggingBoard;
+                
                 retainingCost = (pileCount * activeReg.ratePileUnit) + cappingBeamCost + laggingBoardCost;
             }
 
             const earthworkVolume = (areaM2 * excavationDepth) + (isWall ? finalPerimeter * wallThickness : 0);
             const earthworkCost = earthworkVolume * activeReg.rateEarthworkM3;
-            
-            // 結構主體累計 PC 成本
             const structureCost = (totalRC * activeReg.rateRC_M3) + (totalForm * activeReg.rateForm_M2) + (totalRebar * activeReg.rateRebar_KG) + pcCost;
             
             const supportLayers = excavationDepth > 3.0 ? Math.max(1, Math.ceil((excavationDepth - 2.5) / activeReg.supportVerticalSpan)) : 0;
             const supportPostCount = activeReg.supportHorizontalSpacing > 0 ? Math.ceil(areaM2 / Math.pow(activeReg.supportHorizontalSpacing, 2)) : 0;
-            const supportCost = (areaM2 * supportLayers * activeReg.rateSupportM2) + (supportPostCount * (activeReg.rateSupportPostRent + activeReg.rateSupportPostBuy)) + (areaM2 * activeReg.platformRatio * activeReg.ratePlatformM2);
+            
+            const monitoringCost = totalBelowBuildArea * activeReg.rateMonitoring;
+            const supportCost = (areaM2 * supportLayers * activeReg.rateSupportM2) + (supportPostCount * (activeReg.rateSupportPostRent + activeReg.rateSupportPostBuy)) + (areaM2 * activeReg.platformRatio * activeReg.ratePlatformM2) + monitoringCost;
             
             const extraCost = totalBelowBuildArea * (activeReg.rateBasementMEP + activeReg.rateBasementFinish);
 
+            let retainingDesc = isWall ? `壁厚:${wallThickness*100}cm / 預留筋:${Math.round(bendQtyTotal)}m` : `樁數:${pileCount}支 / 壓梁:${cappingBeamQty}m / 擋土板:${Math.round(laggingBoardQty)}m²`;
+
             const results = [
-                { l: isWall ? "擋土工程 (連續壁)" : "擋土工程 (排樁)", v: retainingCost, desc: isWall ? `壁厚:${wallThickness*100}cm / 壓梁:${cappingBeamQty}m / 擋土板:${Math.round(laggingBoardQty)}m²` : `樁數:${pileCount}支 / 壓梁:${cappingBeamQty}m / 擋土板:${Math.round(laggingBoardQty)}m²`, color: 'bg-indigo-500' },
+                { l: isWall ? "擋土工程 (連續壁)" : "擋土工程 (排樁)", v: retainingCost, desc: retainingDesc, color: 'bg-indigo-500' },
                 { l: "結構主體工程", v: structureCost, desc: `RC:${Math.round(totalRC)}m³ / 模板:${Math.round(totalForm)}m² / PC:${Math.round(pcVolume)}m³`, color: 'bg-emerald-500' },
-                { l: "安全支撐工程", v: supportCost, desc: `支撐:${supportLayers}層 / 中間樁:${supportPostCount}支 / 構台比例:${(activeReg.platformRatio*100).toFixed(0)}%`, color: 'bg-rose-500' },
+                { l: "安全支撐工程", v: supportCost, desc: `支撐:${supportLayers}層 / 觀測:${totalBelowBuildArea}坪 / 構台:${(activeReg.platformRatio*100).toFixed(0)}%`, color: 'bg-rose-500' },
                 { l: "土方清運工程", v: earthworkCost, desc: `預估土方量: ${Math.round(earthworkVolume)}m³`, color: 'bg-amber-500' }
             ];
             const total = results.reduce((a, b) => a + b.v, 0) + extraCost;
@@ -459,7 +472,7 @@
                 { t: "開挖深度", v: `${physics.excavationDepth.toFixed(1)} m`, i: "arrow-down" },
                 { t: "支撐層數", v: `${physics.supportLayers} 層`, i: "layers" },
                 { t: "總混凝土量", v: `${Math.round(physics.totalRC)} m³`, i: "droplet" },
-                { t: "平均造價/坪", v: `${numFmt.format(avg)} 元`, i: "component" }
+                { t: "總建築坪數", v: `${numFmt.format(physics.totalBelowBuildArea)} 坪`, i: "component" }
             ].map(c => `<div class="bg-white p-4 rounded-2xl border border-slate-200 shadow-sm"><div class="text-[9px] font-black text-slate-400 uppercase flex items-center gap-1 mb-1"><i data-lucide="${c.i}" class="w-3 h-3"></i> ${c.t}</div><div class="text-lg font-black text-slate-800">${c.v}</div></div>`).join('');
 
             document.getElementById('budget-body').innerHTML = results.map(r => `
@@ -469,8 +482,8 @@
                     <td class="px-8 py-5 text-right font-black text-slate-700">${numFmt.format(r.v)}元</td>
                 </tr>`).join('');
 
-            const wallKeys = isWall ? ['rateWall60','rateWall70','rateWall80','rateWall90','rateWall100','rateGuideWall','rateCappingBeam','rateLaggingBoard','rateWallChip','rateWallRebarBend'] : ['ratePileUnit','rateCappingBeam','rateLaggingBoard'];
-            const supportKeys = ['supportHorizontalSpacing', 'supportVerticalSpan', 'platformRatio', 'rateSupportM2', 'rateSupportPostRent', 'rateSupportPostBuy', 'ratePlatformM2'];
+            const wallKeys = isWall ? ['rateWall60','rateWall70','rateWall80','rateWall90','rateWall100','rateGuideWall','rateWallChip','rateWallRebarBend', 'depthRatio', 'thicknessRatio', 'ratePavement','rateSettlingTank'] : ['ratePileUnit','rateCappingBeam','rateLaggingBoard'];
+            const supportKeys = ['supportHorizontalSpacing', 'supportVerticalSpan', 'platformRatio', 'rateSupportM2', 'rateSupportPostRent', 'rateSupportPostBuy', 'ratePlatformM2', 'rateMonitoring'];
             const otherKeys = ['rateEarthworkM3','rateRC_M3','ratePC_M3','rateForm_M2','rateRebar_KG','rateBasementMEP','rateBasementFinish'];
 
             const renderRates = (keys) => keys.map(k => `<div class="flex items-center justify-between group"><label class="text-[9px] font-black text-slate-500 group-hover:text-indigo-300 transition-colors">${KEY_LABELS[k]}</label>
